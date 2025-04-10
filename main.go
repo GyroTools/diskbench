@@ -146,6 +146,12 @@ func parseSize(sizeStr string) (int64, error) {
 func runBenchmark(sourcePath, targetPath string, size int64, workers int, iterations int, noCleanup bool) error {
 	var srcFilePaths []string
 
+	// try to clear the system caches before starting the benchmark (this only works under linux and with sudo)
+	// err := clearCaches()
+	// if err == nil {
+	// 	fmt.Println("Successfully cleared system caches")
+	// }
+
 	// Create one source file per worker to prevent contention
 	fmt.Printf("Creating %d temporary source files (%d bytes each)...\n", workers, size)
 	for w := 1; w <= workers; w++ {
@@ -370,6 +376,20 @@ func createRandomFile(file *os.File, size int64) error {
 	return nil
 }
 
+func clearCaches() error {
+	// This only works if the program is run with sudo
+	f, err := os.OpenFile("/proc/sys/vm/drop_caches", os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open drop_caches: %v (may need sudo)", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString("3\n"); err != nil {
+		return fmt.Errorf("failed to clear caches: %v", err)
+	}
+	return nil
+}
+
 // copyFile copies a file from src to dst and returns the number of bytes copied
 func copyFile(srcPath, dstPath string) (int64, error) {
 	// Open the source file
@@ -379,7 +399,7 @@ func copyFile(srcPath, dstPath string) (int64, error) {
 	}
 	defer srcFile.Close()
 
-	// Create the destination file
+	// Create the destination file with O_SYNC flag to ensure writes are synchronous
 	dstFile, err := os.Create(dstPath)
 	if err != nil {
 		return 0, err
@@ -387,7 +407,18 @@ func copyFile(srcPath, dstPath string) (int64, error) {
 	defer dstFile.Close()
 
 	// Copy the file
-	return io.Copy(dstFile, srcFile)
+	bytesWritten, err := io.Copy(dstFile, srcFile)
+	if err != nil {
+		return 0, err
+	}
+
+	// ensure data is written
+	err = dstFile.Sync()
+	if err != nil {
+		return 0, err
+	}
+
+	return bytesWritten, nil
 }
 
 func init() {
